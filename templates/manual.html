@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{ video.title }}</title><link rel="stylesheet" href="/static/style.css"></head>
+<body class="workspace">
+<aside class="steps"><a class="brand" href="/"><i>f</i><b>factory-ai-manual</b></a><div class="step-head"><span>{{ video.title }}</span><small>{{ processes|length }}工程</small></div><div id="step-list">
+{% for p in processes %}<button class="step" data-index="{{ loop.index0 }}" data-start="{{ p.start_time }}" data-end="{{ p.end_time }}"><em>{{ loop.index }}</em><div><b>{{ p.title }}</b><small>{{ '%.1f'|format(p.end_time-p.start_time) }}秒</small><p>{{ p.description_ja }}</p></div></button>{% endfor %}
+</div></aside>
+<main class="editor"><header><div><p class="eyebrow">VIDEO MANUAL</p><h1>{{ video.title }}</h1></div><div class="header-actions"><form action="/manuals/{{ video.id }}/translate" method="post" class="language-form"><select name="language" aria-label="翻訳する言語"><option value="en">English</option><option value="vi">Tiếng Việt</option><option value="zh">中文</option></select><button class="primary" type="submit">翻訳して表示</button></form><a class="language-reset{% if language_code == 'ja' %} active{% endif %}" href="/manuals/{{ video.id }}">日本語</a><a class="outline link" href="/manuals/{{ video.id }}/edit">編集する</a></div></header>
+<section class="player"><video id="video" controls src="/api/videos/{{ video.id }}/stream"></video><div id="caption"></div></section>
+<section class="gantt" data-duration="{{ video.duration }}"><div class="gantt-head"><div><p class="eyebrow">PROCESS TIMELINE</p><h2>工程ガントチャート</h2></div><span>選択工程を繰り返し再生</span></div><div class="gantt-scale"><i>0:00</i><i>{{ '%.0f'|format(video.duration/2) }}秒</i><i>{{ '%.0f'|format(video.duration) }}秒</i></div><div class="gantt-body"><div id="playhead" class="playhead"></div>
+{% for p in processes %}<button class="gantt-row" data-index="{{ loop.index0 }}" data-start="{{ p.start_time }}" data-end="{{ p.end_time }}"><span>{{ loop.index }}　{{ p.title }}</span><i class="gantt-track"><b style="left:{{ p.start_time / video.duration * 100 if video.duration else 0 }}%;width:{{ (p.end_time-p.start_time) / video.duration * 100 if video.duration else 0 }}%"></b></i><small>{{ '%.1f'|format(p.end_time-p.start_time) }}秒</small></button>{% endfor %}
+</div></section>
+<section class="readout"><span id="number">—</span><div><h2 id="title">工程を選択してください</h2><p id="description">左側の工程をクリックすると、その工程だけを繰り返し再生します。</p></div><small id="duration"></small></section></main>
+<script src="/static/manual.js"></script></body></html>

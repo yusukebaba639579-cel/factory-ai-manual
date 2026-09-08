@@ -1,0 +1,19 @@
+# Local Python environment
+.venv/
+__pycache__/
+*.py[cod]
+
+# Uploaded factory videos and generated local data
+uploads/
+factory_ai_manual.db
+factory_ai_manual.db-*
+
+# Downloaded AI models (downloaded again on first use)
+models/
+
+# Local configuration and editor files
+.env
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
