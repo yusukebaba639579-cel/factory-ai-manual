@@ -16,12 +16,75 @@
 
 ## 起動
 
-```powershell
-cd "C:\Users\baba\Documents\ChatGPT\New project\factory-ai-manual"
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+```
+1. 必要ソフトの確認
+git --version
+py -3.12 --version
+ollama --version
+認識されないものだけインストールします。
+Gitがない場合
+winget install --id Git.Git -e
+Python 3.12がない場合
+winget install --id Python.Python.3.12 -e
+Ollamaがない場合
+powershell -Command "irm https://ollama.com/install.ps1 | iex"
+インストール後、コマンドプロンプトを一度閉じて、新しく開き直してください。
+2. Phi-4をダウンロード
+ollama pull phi4
+確認：
+ollama list
+一覧に phi4 が表示されれば準備完了です。
+3. 保存先を作成
+mkdir "C:\factory-ai"
+cd /d "C:\factory-ai"
+4. GitHubから取得
+git clone https://github.com/yusukebaba639579-cel/factory-ai-manual.git
+プロジェクトへ移動：
+cd factory-ai-manual
+確認：
+git status
+5. Python仮想環境を作成
+py -3.12 -m venv .venv
+仮想環境を有効化：
+.venv\Scripts\activate.bat
+成功すると、行の先頭に (.venv) と表示されます。
+6. ライブラリをインストール
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+MediaPipe、OpenCV、Flask、Argos Translateなどがインストールされます。数分かかる場合があります。
+7. Ollamaの動作確認
+ollama run phi4
+入力待ちになったら、次を入力します。
+こんにちは
+回答が表示されたら終了します。
+/bye
+Ollamaアプリはバックグラウンドで動かしておいてください。
+8. アプリを起動
+プロジェクトフォルダにいることを確認：
+cd /d "C:\factory-ai\factory-ai-manual"
+仮想環境を有効化：
+.venv\Scripts\activate.bat
+起動：
+python app.py
+次の表示が出れば成功です。
+Running on http://127.0.0.1:5051
+ブラウザで開きます。
+http://127.0.0.1:5051
+9. 初回利用時
+最初の動画解析時に、MediaPipeのモデルがダウンロードされます。
+最初の翻訳時に、選択した言語のArgos Translateモデルがダウンロードされます。
+そのため、初回だけインターネット接続が必要です。モデル取得後はローカルで動作します。
+10. アプリの終了
+アプリを起動したコマンドプロンプトで：
+Ctrl + C
+2回目以降の起動
+cd /d "C:\factory-ai\factory-ai-manual"
+git pull
+.venv\Scripts\activate.bat
 pip install -r requirements.txt
 python app.py
+ブラウザ：
+http://127.0.0.1:5051
 ```
 
 ブラウザで `http://127.0.0.1:5051` を開きます。既存の `factory-ai`（5050番）とは別ポートです。
