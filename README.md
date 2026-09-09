@@ -78,9 +78,6 @@ http://127.0.0.1:5051
 アプリを起動したコマンドプロンプトで：
 Ctrl + C
 2回目以降の起動
-git config --global --add safe.directory "%CD%"
-git pull origin main
-依存ライブラリも更新します。
 cd C:\Users\y-baba.ADTEK-FUJI\factoryai\factory-ai-manual
 
 call .venv\Scripts\activate.bat
@@ -89,12 +86,6 @@ python app.py
 
 ブラウザ：
 http://127.0.0.1:5051
-```
-
-ブラウザで `http://127.0.0.1:5051` を開きます。既存の `factory-ai`（5050番）とは別ポートです。
-
-先に別のターミナルで `ollama run phi4` を実行してください。Ollama + Phi-4へ接続できない場合、マニュアルは生成されません。
-
 `phi4` は映像を直接見るモデルではありません。作業区切りはOpenCVが映像変化から検出し、Phi-4は作業名・作業順・区間時間をもとに文章を生成します。
 
 作業ラベルは「ねじ締め」「ねじの締付確認」「不適合確認」の3種類と「判定保留」です。作業数は固定せず、OpenCVの映像変化とMediaPipe Pose／Handsの動作変化から決定します。Phi-4の説明文は各作業1文・30文字以内です。
