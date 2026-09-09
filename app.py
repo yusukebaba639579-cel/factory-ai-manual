@@ -48,7 +48,8 @@ def init_database():
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           title TEXT NOT NULL, file_name TEXT NOT NULL, file_path TEXT NOT NULL,
           duration REAL NOT NULL DEFAULT 0, rotation INTEGER NOT NULL DEFAULT 0,
-          procedure_name TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+          procedure_name TEXT NOT NULL DEFAULT '', viewer_analysis_version INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS processes (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -80,6 +81,14 @@ def init_database():
             db.execute("ALTER TABLE videos ADD COLUMN rotation INTEGER NOT NULL DEFAULT 0")
         if "procedure_name" not in video_columns:
             db.execute("ALTER TABLE videos ADD COLUMN procedure_name TEXT NOT NULL DEFAULT ''")
+        if "viewer_analysis_version" not in video_columns:
+            db.execute("ALTER TABLE videos ADD COLUMN viewer_analysis_version INTEGER NOT NULL DEFAULT 0")
+        if "active_json" not in columns:
+            db.execute("ALTER TABLE processes ADD COLUMN active_json TEXT NOT NULL DEFAULT ''")
+        if "focus_x" not in columns:
+            db.execute("ALTER TABLE processes ADD COLUMN focus_x REAL NOT NULL DEFAULT 0.5")
+        if "focus_y" not in columns:
+            db.execute("ALTER TABLE processes ADD COLUMN focus_y REAL NOT NULL DEFAULT 0.5")
 
 
 init_database()
@@ -163,6 +172,87 @@ def detect_process_ranges(path: Path, rotation: int = 0) -> tuple[float, list[di
         feature = [float(np.mean([s["image"] for s in selected])), float(np.mean([s["body"] for s in selected])), float(np.mean([s["hands"] for s in selected]))]
         segments.append({"start": start, "end": end, "feature": feature})
     return duration, segments or [{"start": 0.0, "end": duration, "feature": [0, 0, 0]}]
+
+
+def analyze_viewer_activity(path: Path, processes, rotation: int = 0) -> list[dict]:
+    """Locate useful motion and its visual center without modifying the source video."""
+    capture = cv2.VideoCapture(str(path))
+    if not capture.isOpened():
+        return []
+    results = []
+    for process in processes:
+        start, end, interval = float(process["start_time"]), float(process["end_time"]), 0.16
+        samples, previous = [], None
+        for timestamp in np.arange(start, end, interval):
+            capture.set(cv2.CAP_PROP_POS_MSEC, float(timestamp * 1000))
+            ok, frame = capture.read()
+            if not ok:
+                continue
+            if rotation == 180:
+                frame = cv2.rotate(frame, cv2.ROTATE_180)
+            gray = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (160, 90))
+            if previous is None:
+                samples.append((float(timestamp), 0.0, 0.5, 0.5))
+            else:
+                difference = cv2.absdiff(gray, previous).astype(np.float32) / 255
+                score = float(np.mean(difference))
+                weights = np.maximum(difference - 0.055, 0)
+                total = float(weights.sum())
+                if total:
+                    yy, xx = np.indices(weights.shape)
+                    focus_x = float((xx * weights).sum() / total / weights.shape[1])
+                    focus_y = float((yy * weights).sum() / total / weights.shape[0])
+                else:
+                    focus_x, focus_y = 0.5, 0.5
+                samples.append((float(timestamp), score, focus_x, focus_y))
+            previous = gray
+        if len(samples) < 3:
+            results.append({"id": process["id"], "active": [[start, end]], "focus_x": 0.5, "focus_y": 0.5})
+            continue
+        scores = np.asarray([sample[1] for sample in samples])
+        threshold = max(0.008, float(np.percentile(scores, 58)) * 0.85)
+        active_indexes = [index for index, sample in enumerate(samples) if sample[1] >= threshold]
+        if not active_indexes:
+            active_indexes = [int(np.argmax(scores))]
+        ranges = []
+        group_start = group_end = active_indexes[0]
+        for index in active_indexes[1:]:
+            if index - group_end <= 2:
+                group_end = index
+            else:
+                ranges.append([max(start, samples[group_start][0] - 0.2), min(end, samples[group_end][0] + interval + 0.2)])
+                group_start = group_end = index
+        ranges.append([max(start, samples[group_start][0] - 0.2), min(end, samples[group_end][0] + interval + 0.2)])
+        merged = []
+        for item in ranges:
+            if merged and item[0] - merged[-1][1] <= 0.3:
+                merged[-1][1] = max(merged[-1][1], item[1])
+            else:
+                merged.append(item)
+        ranges = merged
+        if sum(item[1] - item[0] for item in ranges) < min(0.8, end - start):
+            peak = samples[int(np.argmax(scores))][0]
+            ranges = [[max(start, peak - 0.45), min(end, peak + 0.45)]]
+        motion_samples = [samples[index] for index in active_indexes]
+        weights = np.asarray([max(item[1], 0.001) for item in motion_samples])
+        focus_x = float(np.average([item[2] for item in motion_samples], weights=weights))
+        focus_y = float(np.average([item[3] for item in motion_samples], weights=weights))
+        results.append({"id": process["id"], "active": [[round(a, 2), round(b, 2)] for a, b in ranges], "focus_x": round(min(0.78, max(0.22, focus_x)), 3), "focus_y": round(min(0.78, max(0.22, focus_y)), 3)})
+    capture.release()
+    return results
+
+
+def ensure_viewer_analysis(video, processes) -> None:
+    if not video or not processes or (int(video["viewer_analysis_version"] or 0) >= 2 and all(row["active_json"] for row in processes)):
+        return
+    path = Path(video["file_path"])
+    if not path.exists():
+        return
+    results = analyze_viewer_activity(path, processes, int(video["rotation"] or 0))
+    with connect() as db:
+        for result in results:
+            db.execute("UPDATE processes SET active_json=?,focus_x=?,focus_y=? WHERE id=?", (json.dumps(result["active"]), result["focus_x"], result["focus_y"], result["id"]))
+        db.execute("UPDATE videos SET viewer_analysis_version=2 WHERE id=?", (video["id"],))
 
 
 def extract_procedure_text(uploaded) -> tuple[str, str]:
@@ -356,14 +446,17 @@ def view_manual(video_id):
     language_code = request.args.get("lang", "ja")
     if language_code not in {"ja", "en", "vi", "zh"}:
         language_code = "ja"
+    video, base_processes = load_manual(video_id)
+    if not video:
+        return "マニュアルが見つかりません。", 404
+    ensure_viewer_analysis(video, base_processes)
     with connect() as db:
-        video = db.execute("SELECT * FROM videos WHERE id=?", (video_id,)).fetchone()
         if language_code == "ja":
             processes = db.execute("SELECT * FROM processes WHERE video_id=? ORDER BY position", (video_id,)).fetchall()
         else:
             processes = db.execute("""
                 SELECT p.id, p.video_id, p.position, p.start_time, p.end_time,
-                       p.feature_json,
+                       p.feature_json, p.active_json, p.focus_x, p.focus_y,
                        COALESCE(NULLIF(t.title, ''), p.title) AS title,
                        COALESCE(NULLIF(t.description, ''), p.description_ja) AS description_ja
                 FROM processes AS p
@@ -372,8 +465,6 @@ def view_manual(video_id):
                 WHERE p.video_id = ?
                 ORDER BY p.position
             """, (language_code, video_id)).fetchall()
-    if not video:
-        return "マニュアルが見つかりません。", 404
     return render_template("manual.html", video=video, processes=processes, language_code=language_code)
 
 

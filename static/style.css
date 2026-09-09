@@ -34,4 +34,5 @@
   .workspace .readout p{margin-top:4px;line-height:1.4}
 }
 .gantt-head-bottom{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
+.manual-player video{transform:rotate(var(--manual-rotation,0deg)) scale(1.18);transform-origin:var(--focus-x,50%) var(--focus-y,50%);transition:transform-origin .25s ease}
 @media(min-width:801px){.workspace .editor header{min-height:44px;margin-bottom:8px}.workspace .editor header h1{font-size:22px;line-height:1.15}.workspace .editor header .eyebrow{margin-bottom:2px;font-size:9px}.workspace .header-actions{gap:5px}.workspace .language-form{gap:5px}.workspace .language-form select,.workspace .language-form button,.workspace .header-actions>a{padding:7px 9px;font-size:12px}.workspace .playback-controls{min-height:40px;padding:5px 8px;gap:7px}.workspace .playback-controls button{padding:6px 9px;font-size:11px}.workspace .playback-controls output{font-size:11px}.workspace .speed-controls{gap:3px}.workspace .speed-controls span{font-size:10px}}
