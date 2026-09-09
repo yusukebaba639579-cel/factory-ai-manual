@@ -78,7 +78,7 @@ http://127.0.0.1:5051
 アプリを起動したコマンドプロンプトで：
 Ctrl + C
 2回目以降の起動
-cd /d "C:\factory-ai\factory-ai-manual"
+cd C:\Users\y-baba.ADTEK-FUJI\factoryai\
 git pull
 .venv\Scripts\activate.bat
 pip install -r requirements.txt
