@@ -33,3 +33,4 @@
   .workspace .readout{margin-top:10px;padding:12px}
   .workspace .readout p{margin-top:4px;line-height:1.4}
 }
+.gantt-head-bottom{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
