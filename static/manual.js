@@ -15,5 +15,6 @@ document.querySelectorAll('[data-speed]').forEach(button=>button.onclick=()=>{vi
 document.querySelector('#flip-toggle').onclick=event=>{video.classList.toggle('rotated-video');event.currentTarget.classList.toggle('active')};
 video.addEventListener('timeupdate',()=>{syncPosition();if(selected&&video.currentTime>=selected.end-.08){video.currentTime=selected.start;syncPosition(selected.start);if(!video.paused)video.play().catch(()=>{})}});
 window.addEventListener('resize',()=>requestAnimationFrame(alignTimelineTracks));
+new ResizeObserver(()=>requestAnimationFrame(alignTimelineTracks)).observe(document.querySelector('.playback-controls'));
 video.addEventListener('loadedmetadata',alignTimelineTracks);
 video.addEventListener('ended',()=>{if(selected){video.currentTime=selected.start;video.play().catch(()=>{})}});if(steps.length)selectProcess(0,false);requestAnimationFrame(alignTimelineTracks);
