@@ -13,7 +13,7 @@ steps.forEach((item,index)=>item.onclick=()=>selectProcess(index));rows.forEach(
 playButton.onclick=()=>video.paused?video.play():video.pause();
 video.addEventListener('play',()=>playButton.textContent='❚❚ 一時停止');video.addEventListener('pause',()=>playButton.textContent='▶ 再生');
 seek.oninput=()=>{video.currentTime=Number(seek.value);syncPosition(seek.value)};
-document.querySelectorAll('[data-speed]').forEach(button=>button.onclick=()=>{video.playbackRate=Number(button.dataset.speed);document.querySelectorAll('[data-speed]').forEach(item=>item.classList.toggle('active',item===button))});
+document.querySelector('#playback-speed').onchange=event=>{video.playbackRate=Number(event.currentTarget.value)};
 function setRotation(value){video.dataset.rotation=String(value);video.style.setProperty('--manual-rotation',`${value}deg`);if(selected)applyFocus(steps[selected.index])}setRotation(Number(video.dataset.rotation)||0);
 document.querySelector('#flip-toggle').onclick=event=>{setRotation((Number(video.dataset.rotation)+180)%360);event.currentTarget.classList.toggle('active')};
 video.addEventListener('timeupdate',()=>{syncPosition();if(!selected)return;const next=selected.active.find(range=>range.start>video.currentTime+.04);const inside=selected.active.some(range=>video.currentTime>=range.start-.04&&video.currentTime<range.end-.04);if(!inside&&next){video.currentTime=next.start;syncPosition(next.start);return}if(video.currentTime>=selected.end-.08){video.currentTime=selected.start;syncPosition(selected.start);if(!video.paused)video.play().catch(()=>{})}});
