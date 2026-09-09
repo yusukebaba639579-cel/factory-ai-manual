@@ -78,11 +78,15 @@ http://127.0.0.1:5051
 アプリを起動したコマンドプロンプトで：
 Ctrl + C
 2回目以降の起動
+git config --global --add safe.directory "%CD%"
+git pull origin main
+依存ライブラリも更新します。
 cd C:\Users\y-baba.ADTEK-FUJI\factoryai\factory-ai-manual
-git pull
-.venv\Scripts\activate.bat
-pip install -r requirements.txt
+
+call .venv\Scripts\activate.bat
+python -m pip install -r requirements.txt
 python app.py
+
 ブラウザ：
 http://127.0.0.1:5051
 ```
