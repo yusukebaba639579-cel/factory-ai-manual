@@ -259,8 +259,8 @@ def extract_procedure_text(uploaded) -> tuple[str, str]:
     if not uploaded or not uploaded.filename:
         return "", ""
     extension = Path(uploaded.filename).suffix.lower()
-    if extension not in {".pdf", ".docx", ".xlsx", ".csv", ".txt"}:
-        raise ValueError("手順書はPDF・Word・Excel・CSV・TXTに対応しています。")
+    if extension not in {".pdf", ".docx", ".xlsx", ".xlsm", ".csv", ".txt"}:
+        raise ValueError("手順書はPDF・Word・Excel（XLSX・XLSM）・CSV・TXTに対応しています。")
     safe_name = secure_filename(uploaded.filename) or f"procedure{extension}"
     path = UPLOAD_DIR / f"{uuid.uuid4().hex}_{safe_name}"
     uploaded.save(path)
@@ -269,8 +269,8 @@ def extract_procedure_text(uploaded) -> tuple[str, str]:
             text = "\n".join(page.extract_text() or "" for page in PdfReader(path).pages)
         elif extension == ".docx":
             text = "\n".join(paragraph.text for paragraph in Document(path).paragraphs)
-        elif extension == ".xlsx":
-            workbook = load_workbook(path, read_only=True, data_only=True)
+        elif extension in {".xlsx", ".xlsm"}:
+            workbook = load_workbook(path, read_only=True, data_only=True, keep_vba=extension == ".xlsm")
             text = "\n".join(" | ".join(str(value) for value in row if value is not None) for sheet in workbook.worksheets for row in sheet.iter_rows(values_only=True))
         else:
             text = path.read_text(encoding="utf-8-sig", errors="ignore")
