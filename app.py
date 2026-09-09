@@ -11,6 +11,9 @@ from urllib.request import urlretrieve
 import cv2
 import mediapipe as mp
 import numpy as np
+from docx import Document
+from openpyxl import load_workbook
+from pypdf import PdfReader
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from flask import Flask, jsonify, redirect, render_template, request, send_file, url_for
@@ -44,7 +47,8 @@ def init_database():
         CREATE TABLE IF NOT EXISTS videos (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           title TEXT NOT NULL, file_name TEXT NOT NULL, file_path TEXT NOT NULL,
-          duration REAL NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+          duration REAL NOT NULL DEFAULT 0, rotation INTEGER NOT NULL DEFAULT 0,
+          procedure_name TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS processes (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,6 +75,11 @@ def init_database():
         translation_columns = {row[1] for row in db.execute("PRAGMA table_info(translations)")}
         if "title" not in translation_columns:
             db.execute("ALTER TABLE translations ADD COLUMN title TEXT NOT NULL DEFAULT ''")
+        video_columns = {row[1] for row in db.execute("PRAGMA table_info(videos)")}
+        if "rotation" not in video_columns:
+            db.execute("ALTER TABLE videos ADD COLUMN rotation INTEGER NOT NULL DEFAULT 0")
+        if "procedure_name" not in video_columns:
+            db.execute("ALTER TABLE videos ADD COLUMN procedure_name TEXT NOT NULL DEFAULT ''")
 
 
 init_database()
@@ -86,7 +95,7 @@ def ensure_model(path: Path, url: str) -> str:
     return str(path)
 
 
-def detect_process_ranges(path: Path) -> tuple[float, list[dict]]:
+def detect_process_ranges(path: Path, rotation: int = 0) -> tuple[float, list[dict]]:
     """Find a variable number of boundaries from image, arm and hand motion."""
     capture = cv2.VideoCapture(str(path))
     if not capture.isOpened():
@@ -107,6 +116,8 @@ def detect_process_ranges(path: Path) -> tuple[float, list[dict]]:
             ok, frame = capture.read()
             if not ok:
                 continue
+            if rotation == 180:
+                frame = cv2.rotate(frame, cv2.ROTATE_180)
             gray = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (48, 27))
             image_motion = 0.0 if previous_gray is None else float(np.mean(cv2.absdiff(gray, previous_gray)) / 255)
             image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
@@ -154,6 +165,69 @@ def detect_process_ranges(path: Path) -> tuple[float, list[dict]]:
     return duration, segments or [{"start": 0.0, "end": duration, "feature": [0, 0, 0]}]
 
 
+def extract_procedure_text(uploaded) -> tuple[str, str]:
+    if not uploaded or not uploaded.filename:
+        return "", ""
+    extension = Path(uploaded.filename).suffix.lower()
+    if extension not in {".pdf", ".docx", ".xlsx", ".csv", ".txt"}:
+        raise ValueError("手順書はPDF・Word・Excel・CSV・TXTに対応しています。")
+    safe_name = secure_filename(uploaded.filename) or f"procedure{extension}"
+    path = UPLOAD_DIR / f"{uuid.uuid4().hex}_{safe_name}"
+    uploaded.save(path)
+    try:
+        if extension == ".pdf":
+            text = "\n".join(page.extract_text() or "" for page in PdfReader(path).pages)
+        elif extension == ".docx":
+            text = "\n".join(paragraph.text for paragraph in Document(path).paragraphs)
+        elif extension == ".xlsx":
+            workbook = load_workbook(path, read_only=True, data_only=True)
+            text = "\n".join(" | ".join(str(value) for value in row if value is not None) for sheet in workbook.worksheets for row in sheet.iter_rows(values_only=True))
+        else:
+            text = path.read_text(encoding="utf-8-sig", errors="ignore")
+    except Exception as error:
+        raise ValueError(f"手順書を読み取れませんでした: {error}") from error
+    if not text.strip():
+        raise ValueError("手順書から文字を読み取れませんでした。")
+    return text[:16000], uploaded.filename
+
+
+def fit_segments_to_steps(segments: list[dict], duration: float, count: int) -> list[dict]:
+    count = max(1, min(count, 30))
+    candidates = [item["end"] for item in segments[:-1]]
+    boundaries = [0.0]
+    for index in range(1, count):
+        target = duration * index / count
+        usable = [value for value in candidates if value > boundaries[-1] + .7 and duration - value > (count - index) * .7]
+        boundaries.append(min(usable, key=lambda value: abs(value - target)) if usable else target)
+    boundaries.append(duration)
+    fitted = []
+    for start, end in zip(boundaries, boundaries[1:]):
+        midpoint = (start + end) / 2
+        source = min(segments, key=lambda item: abs((item["start"] + item["end"]) / 2 - midpoint))
+        fitted.append({"start": round(start, 2), "end": round(end, 2), "feature": source["feature"]})
+    return fitted
+
+
+def generate_from_procedure(manual_title: str, procedure_text: str) -> list[dict]:
+    prompt = f"""次の社内手順書を動画マニュアル用の作業一覧へ変換してください。
+手順書に書かれた順番・作業数・作業名を最優先してください。注意書きだけの行は独立作業にしないでください。
+各説明は日本語1文、30文字以内。JSONのみを返してください。
+形式: {{"processes":[{{"title":"作業名","description":"短い説明"}}]}}
+マニュアル名: {manual_title}
+手順書:\n{procedure_text}"""
+    try:
+        data = json.dumps({"model": "phi4", "prompt": prompt, "stream": False, "format": "json", "keep_alive": "10m", "options": {"temperature": .1, "num_predict": 900}}).encode("utf-8")
+        req = Request("http://127.0.0.1:11434/api/generate", data=data, headers={"Content-Type": "application/json"})
+        with urlopen(req, timeout=180) as response:
+            result = json.loads(json.loads(response.read())["response"])["processes"]
+    except Exception as error:
+        raise ValueError("Phi-4で手順書を解析できませんでした。") from error
+    clean = [{"title": str(item.get("title", "作業")).strip()[:40], "description": str(item.get("description", "")).strip()[:30]} for item in result if str(item.get("title", "")).strip()]
+    if not clean:
+        raise ValueError("手順書から作業を抽出できませんでした。")
+    return clean
+
+
 def predict_labels(segments: list[dict]) -> list[str]:
     allowed = ["ねじ締め", "ねじの締付確認", "不適合確認"]
     with connect() as db:
@@ -184,9 +258,9 @@ def generate_processes_with_phi4(manual_title: str, segments: list[dict]) -> lis
     timing = [{"number": i + 1, "start": item["start"], "end": item["end"], "seconds": round(item["end"] - item["start"], 1), "label": labels[i]} for i, item in enumerate(segments)]
     prompt = f"""あなたは製造現場の標準作業書を作る専門家です。
 マニュアル名: {manual_title}
-OpenCVが映像変化から検出した工程候補: {json.dumps(timing, ensure_ascii=False)}
-工程名は候補のlabelをそのまま使ってください。labelは「ねじ締め」「ねじの締付確認」「不適合確認」「判定保留」のいずれかです。
-工程数を変えないでください。各工程の説明を日本語で1文、30文字以内で作ってください。推測した固有部品名や数値は書かないでください。
+OpenCVが映像変化から検出した作業候補: {json.dumps(timing, ensure_ascii=False)}
+作業名は候補のlabelをそのまま使ってください。labelは「ねじ締め」「ねじの締付確認」「不適合確認」「判定保留」のいずれかです。
+作業数を変えないでください。各作業の説明を日本語で1文、30文字以内で作ってください。推測した固有部品名や数値は書かないでください。
 JSONのみを返してください。形式: {{"processes":[{{"number":1,"title":"...","description":"..."}}]}}"""
     try:
         data = json.dumps({"model": "phi4", "prompt": prompt, "stream": False, "format": "json", "keep_alive": "10m", "options": {"temperature": 0.1, "num_predict": 180}}).encode("utf-8")
@@ -194,9 +268,9 @@ JSONのみを返してください。形式: {{"processes":[{{"number":1,"title"
         with urlopen(req, timeout=180) as response:
             result = json.loads(json.loads(response.read())["response"])["processes"]
     except Exception as error:
-        raise ValueError("Ollama + Phi-4で工程文を生成できませんでした。Ollamaを起動し、ollama run phi4 を実行してください。") from error
+        raise ValueError("Ollama + Phi-4で作業文を生成できませんでした。Ollamaを起動し、ollama run phi4 を実行してください。") from error
     if not isinstance(result, list) or len(result) != len(segments):
-        raise ValueError("Phi-4の生成結果を工程データとして読み取れませんでした。もう一度お試しください。")
+        raise ValueError("Phi-4の生成結果を作業データとして読み取れませんでした。もう一度お試しください。")
     for index, item in enumerate(result):
         item["title"] = labels[index]
         description = str(item.get("description", "")).strip().replace("\n", " ")
@@ -225,8 +299,14 @@ def create_video():
     stored = UPLOAD_DIR / f"{uuid.uuid4().hex}_{safe_name}"
     uploaded.save(stored)
     title = request.form.get("title", "").strip() or Path(uploaded.filename).stem
+    rotation = 180 if request.form.get("rotate") == "180" else 0
     try:
-        duration, ranges = detect_process_ranges(stored)
+        procedure_text, procedure_name = extract_procedure_text(request.files.get("procedure"))
+    except ValueError as error:
+        stored.unlink(missing_ok=True)
+        return jsonify(error=str(error)), 400
+    try:
+        duration, ranges = detect_process_ranges(stored, rotation)
     except ValueError:
         capture = cv2.VideoCapture(str(stored))
         fps, frames = capture.get(cv2.CAP_PROP_FPS) or 30, capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0
@@ -236,12 +316,20 @@ def create_video():
             stored.unlink(missing_ok=True)
             return jsonify(error="動画を読み込めませんでした。別のMP4動画をお試しください。"), 400
         ranges = [{"start": 0.0, "end": round(duration, 2), "feature": [0, 0, 0]}]
-    try:
-        generated = generate_processes_with_phi4(title, ranges)
-    except ValueError:
-        generated = [{"title": "判定保留", "description": "映像を確認して作業内容を登録してください。"} for _ in ranges]
+    if procedure_text:
+        try:
+            generated = generate_from_procedure(title, procedure_text)
+            ranges = fit_segments_to_steps(ranges, duration, len(generated))
+        except ValueError:
+            generated = [{"title": "手順書確認", "description": "手順書を確認して作業内容を登録してください。"}]
+            ranges = fit_segments_to_steps(ranges, duration, 1)
+    else:
+        try:
+            generated = generate_processes_with_phi4(title, ranges)
+        except ValueError:
+            generated = [{"title": "判定保留", "description": "映像を確認して作業内容を登録してください。"} for _ in ranges]
     with connect() as db:
-        cursor = db.execute("INSERT INTO videos(title,file_name,file_path,duration,created_at) VALUES(?,?,?,?,?)", (title, uploaded.filename, str(stored), duration, datetime.now(timezone.utc).isoformat()))
+        cursor = db.execute("INSERT INTO videos(title,file_name,file_path,duration,rotation,procedure_name,created_at) VALUES(?,?,?,?,?,?,?)", (title, uploaded.filename, str(stored), duration, rotation, procedure_name, datetime.now(timezone.utc).isoformat()))
         video_id = cursor.lastrowid
         for position, (segment, text) in enumerate(zip(ranges, generated), 1):
             db.execute("INSERT INTO processes(video_id,position,title,start_time,end_time,description_ja,feature_json) VALUES(?,?,?,?,?,?,?)", (video_id, position, str(text.get("title", "判定保留")).strip(), segment["start"], segment["end"], str(text.get("description", "")).strip(), json.dumps(segment["feature"])))
@@ -348,7 +436,7 @@ def translate_manual(video_id):
         return redirect(url_for("view_manual", video_id=video_id))
     video, processes = load_manual(video_id)
     if not video or not processes:
-        return "翻訳する工程がありません。", 400
+        return "翻訳する作業がありません。", 400
     try:
         ensure_argos_pair("ja", language_code)
         translated = [{"id": row["id"], "title": argos_translate_text(row["title"], language_code), "description": argos_translate_text(row["description_ja"], language_code)} for row in processes]
@@ -378,7 +466,7 @@ def create_process(video_id):
         if not title or start < 0 or end <= start:
             raise ValueError
     except (KeyError, TypeError, ValueError):
-        return jsonify(error="工程名と正しい開始・終了位置を入力してください。"), 400
+        return jsonify(error="作業名と正しい開始・終了位置を入力してください。"), 400
     with connect() as db:
         video = db.execute("SELECT duration FROM videos WHERE id=?", (video_id,)).fetchone()
         if not video:
@@ -395,11 +483,11 @@ def update_process(process_id):
     payload = request.get_json(silent=True) or {}
     title, description = str(payload.get("title", "")).strip(), str(payload.get("description_ja", "")).strip()
     if not title:
-        return jsonify(error="工程名を入力してください。"), 400
+        return jsonify(error="作業名を入力してください。"), 400
     with connect() as db:
         current = db.execute("SELECT title,feature_json FROM processes WHERE id=?", (process_id,)).fetchone()
         if not current:
-            return jsonify(error="工程が見つかりません。"), 404
+            return jsonify(error="作業が見つかりません。"), 404
         cursor = db.execute("UPDATE processes SET title=?,description_ja=? WHERE id=?", (title, description, process_id))
         if title in {"ねじ締め", "ねじの締付確認", "不適合確認"} and current["feature_json"] != "[]":
             db.execute("INSERT INTO training_examples(label,feature_json,created_at) VALUES(?,?,?)", (title, current["feature_json"], datetime.now(timezone.utc).isoformat()))
@@ -411,7 +499,7 @@ def delete_process(process_id):
     with connect() as db:
         row = db.execute("SELECT video_id FROM processes WHERE id=?", (process_id,)).fetchone()
         if not row:
-            return jsonify(error="工程が見つかりません。"), 404
+            return jsonify(error="作業が見つかりません。"), 404
         db.execute("DELETE FROM processes WHERE id=?", (process_id,))
         rows = db.execute("SELECT id FROM processes WHERE video_id=? ORDER BY position", (row["video_id"],)).fetchall()
         for position, item in enumerate(rows, 1):
@@ -424,8 +512,8 @@ def ai_description(process_id):
     with connect() as db:
         process = db.execute("SELECT title FROM processes WHERE id=?", (process_id,)).fetchone()
     if not process:
-        return jsonify(error="工程が見つかりません。"), 404
-    prompt = f"製造現場の動画マニュアルです。工程『{process['title']}』の説明を日本語で1文、30文字以内で書いてください。"
+        return jsonify(error="作業が見つかりません。"), 404
+    prompt = f"製造現場の動画マニュアルです。作業『{process['title']}』の説明を日本語で1文、30文字以内で書いてください。"
     try:
         data = json.dumps({"model": "phi4", "prompt": prompt, "stream": False}).encode()
         req = Request("http://127.0.0.1:11434/api/generate", data=data, headers={"Content-Type": "application/json"})
