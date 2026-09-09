@@ -576,13 +576,21 @@ def update_process(process_id):
     if not title:
         return jsonify(error="作業名を入力してください。"), 400
     with connect() as db:
-        current = db.execute("SELECT title,feature_json FROM processes WHERE id=?", (process_id,)).fetchone()
+        current = db.execute("SELECT p.title,p.feature_json,p.start_time,p.end_time,v.duration FROM processes p JOIN videos v ON v.id=p.video_id WHERE p.id=?", (process_id,)).fetchone()
         if not current:
             return jsonify(error="作業が見つかりません。"), 404
-        cursor = db.execute("UPDATE processes SET title=?,description_ja=? WHERE id=?", (title, description, process_id))
+        try:
+            start = round(float(payload.get("start_time", current["start_time"])), 2)
+            end = round(float(payload.get("end_time", current["end_time"])), 2)
+        except (TypeError, ValueError):
+            return jsonify(error="開始・終了位置を数値で入力してください。"), 400
+        if start < 0 or end <= start or end > float(current["duration"]) + 0.05:
+            return jsonify(error="開始・終了位置が動画の範囲外です。"), 400
+        cursor = db.execute("UPDATE processes SET title=?,description_ja=?,start_time=?,end_time=?,active_json='' WHERE id=?", (title, description, start, end, process_id))
+        db.execute("DELETE FROM translations WHERE process_id=?", (process_id,))
         if title in {"ねじ締め", "ねじの締付確認", "不適合確認"} and current["feature_json"] != "[]":
             db.execute("INSERT INTO training_examples(label,feature_json,created_at) VALUES(?,?,?)", (title, current["feature_json"], datetime.now(timezone.utc).isoformat()))
-    return jsonify(ok=bool(cursor.rowcount))
+    return jsonify(ok=bool(cursor.rowcount), start_time=start, end_time=end)
 
 
 @app.delete("/api/processes/<int:process_id>")
